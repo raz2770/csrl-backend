@@ -60,13 +60,13 @@ app.post('/api/auth/login', (req, res) => {
   if (role === 'admin') {
     if (id === ADMIN_CREDENTIALS.username && password === ADMIN_CREDENTIALS.password) {
       const token = jwt.sign({ role: 'admin', id: 'admin' }, JWT_SECRET, { expiresIn: '12h' });
-      return res.json({ success: true, token, role: 'admin', name: 'Super Admin' });
+      return res.json({ success: true, token, role: 'admin', id: 'admin', name: 'Super Admin' });
     }
   } else if (role === 'centre') {
     const cc = CENTERS_CONFIG[id];
     if (cc && cc.password === password) {
       const token = jwt.sign({ role: 'centre', id }, JWT_SECRET, { expiresIn: '12h' });
-      return res.json({ success: true, token, role: 'centre', name: cc.name });
+      return res.json({ success: true, token, role: 'centre', id, centerCode: id, name: cc.name });
     }
   } else if (role === 'student') {
     const globalData = getGlobalData();
@@ -83,6 +83,7 @@ app.post('/api/auth/login', (req, res) => {
         success:    true,
         token,
         role:       'student',
+        id:         student.ROLL_KEY,
         name:       student["STUDENT'S NAME"],
         centerCode: student.centerCode,
         stream:     student.stream || 'JEE',
