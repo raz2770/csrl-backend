@@ -8,6 +8,7 @@ import {
   getGlobalData,
   getCenterData,
 } from './services/dataCache.js';
+import { isFirebaseReady } from './services/firebaseInit.js';
 import {
   isFirestoreEnabled,
   upsertProfileDoc,
@@ -32,6 +33,20 @@ const JWT_SECRET = process.env.JWT_SECRET || 'csrl_super_secret_key_2026';
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
+
+app.get('/api/health', (_req, res) => {
+  const global = getGlobalData();
+  res.json({
+    ok: true,
+    firebaseReady: isFirebaseReady(),
+    firestoreEnabled: isFirestoreEnabled(),
+    counts: {
+      profiles: global.profiles.length,
+      tests: global.tests.length,
+      testColumns: global.testColumns.length,
+    },
+  });
+});
 
 // ── Profile helpers ────────────────────────────────────────────────────────────
 
