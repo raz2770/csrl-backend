@@ -22,8 +22,10 @@ import {
   rankCentresByTest,
   computeWeakSubjectAnalysis,
   subjectAverages,
+  subjectAveragesForTest,
   buildStudentChartData,
   computeStudentWeakSubject,
+  computeTestInsights,
 } from './services/analyticsService.js';
 import { CENTERS_CONFIG, ADMIN_CREDENTIALS } from './config/centers.js';
 
@@ -200,13 +202,31 @@ app.get('/api/analytics/centre-leaderboard', authenticateToken, (req, res) => {
 });
 
 /**
- * GET /api/analytics/subject-averages?centerCode=
+ * GET /api/analytics/subject-averages?centerCode=&testKey=
  * Per-subject averages (weakest first). Scoped to a centre if centerCode provided.
+ * If testKey is set, only that test’s subject columns are included (not all tests).
  */
 app.get('/api/analytics/subject-averages', authenticateToken, (req, res) => {
-  const { centerCode } = req.query;
+  const { centerCode, testKey } = req.query;
   const source = centerCode ? getCenterData(centerCode) : getGlobalData();
-  const result = subjectAverages(source.tests, source.testColumns);
+  const result = testKey
+    ? subjectAveragesForTest(source.tests, source.testColumns, testKey)
+    : subjectAverages(source.tests, source.testColumns);
+  res.json(result);
+});
+
+/**
+ * GET /api/analytics/test-insights?testKey=&rollKey=
+ * CAT-style analysis (marks-based). Uses global data. Optional rollKey for student card.
+ */
+app.get('/api/analytics/test-insights', authenticateToken, (req, res) => {
+  const { testKey, rollKey } = req.query;
+  if (!testKey) return res.status(400).json({ message: 'testKey is required' });
+
+  const global = getGlobalData();
+  const result = computeTestInsights(global.profiles, global.tests, testKey, global.testColumns, {
+    rollKey: rollKey || undefined,
+  });
   res.json(result);
 });
 
