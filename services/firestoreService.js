@@ -2,7 +2,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import { initFirebaseApp } from './firebaseInit.js';
 import { flatToNested, nestedToFlat, extractColumnsFromNestedTests } from '../utils/testColumns.js';
 
-const COL_PROFILES = 'profiles';
+const COL_PROFILES = 'students';
 const COL_TESTS    = 'testScores'; // renamed from 'tests' for clarity
 
 const BATCH_LIMIT = 450;
@@ -12,8 +12,10 @@ export function isFirestoreEnabled() {
 }
 
 export function makeDocId(centerCode, rollKey) {
+  void centerCode;
   const r = String(rollKey ?? '').trim().replace(/\//g, '_');
-  return `${centerCode}__${r}`;
+  // Keep IDs compatible with migration scripts that use roll-key doc ids.
+  return r;
 }
 
 function stripUndefined(obj) {
