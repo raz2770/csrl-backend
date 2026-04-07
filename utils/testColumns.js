@@ -106,8 +106,8 @@ export function flatToNested(flatRecord) {
  */
 export function nestedToFlat(nestedRecord) {
   const flat = {
-    ROLL_KEY:   nestedRecord.ROLL_KEY   || '',
-    centerCode: nestedRecord.centerCode || '',
+    ROLL_KEY:   nestedRecord.ROLL_KEY   || nestedRecord.rollKey || '',
+    centerCode: nestedRecord.centerCode || nestedRecord.centreCode || '',
     stream:     nestedRecord.stream     || 'JEE',
   };
 
@@ -115,7 +115,7 @@ export function nestedToFlat(nestedRecord) {
     if (!testData || typeof testData !== 'object') continue;
     for (const [key, value] of Object.entries(testData)) {
       if (value === undefined || value === null) continue;
-      if (key === 'total') {
+      if (key === 'total' || key === 'Total') {
         flat[testName] = value;
       } else {
         flat[`${testName}_${key}`] = value;
@@ -136,7 +136,7 @@ export function extractColumnsFromNestedTests(tests) {
     if (!testData || typeof testData !== 'object') continue;
     cols.add(testName); // total column
     for (const subject of Object.keys(testData)) {
-      if (subject !== 'total') cols.add(`${testName}_${subject}`);
+      if (subject !== 'total' && subject !== 'Total') cols.add(`${testName}_${subject}`);
     }
   }
   return Array.from(cols);

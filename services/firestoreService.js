@@ -53,7 +53,24 @@ function isNestedFormat(doc) {
  */
 function ensureNested(rawDoc) {
   if (!rawDoc) return rawDoc;
-  if (isNestedFormat(rawDoc)) return rawDoc;
+  if (isNestedFormat(rawDoc)) {
+    const normalized = {
+      ...rawDoc,
+      ROLL_KEY: rawDoc.ROLL_KEY || rawDoc.rollKey || '',
+      centerCode: rawDoc.centerCode || rawDoc.centreCode || '',
+      tests: {},
+    };
+
+    for (const [testName, testData] of Object.entries(rawDoc.tests || {})) {
+      if (!testData || typeof testData !== 'object') continue;
+      const one = { ...testData };
+      if (one.total === undefined && one.Total !== undefined) one.total = one.Total;
+      delete one.Total;
+      normalized.tests[testName] = one;
+    }
+
+    return normalized;
+  }
   // Legacy flat doc — convert on the fly
   return flatToNested(rawDoc);
 }
