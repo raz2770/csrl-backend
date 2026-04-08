@@ -1,7 +1,7 @@
+import './bootstrap-env.js';
 import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
-import 'dotenv/config';
 import { isFirebaseReady } from './services/firebaseInit.js';
 import {
   isFirestoreEnabled,
@@ -115,6 +115,9 @@ function authenticateToken(req, res, next) {
   if (!token) return res.sendStatus(401);
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
+    if (user && typeof user.role === 'string') {
+      user.role = user.role.toLowerCase();
+    }
     req.user = user;
     next();
   });
@@ -410,6 +413,21 @@ app.post('/api/tests/:rollKey', authenticateToken, requireAdmin, async (req, res
     console.error('[CRUD] Test upsert failed:', e);
     return res.status(500).json({ message: e.message || 'Save failed' });
   }
+});
+
+// ── Errors (async route failures + thrown errors) ─────────────────────────────
+
+app.use((err, req, res, next) => {
+  void next;
+  console.error('[API]', req.method, req.path, err);
+  const status = Number(err.statusCode || err.status) || 500;
+  const message =
+    err.message ||
+    (status === 500 ? 'Internal Server Error' : 'Request failed');
+  res.status(status).json({
+    message,
+    ...(process.env.NODE_ENV !== 'production' && err.stack ? { detail: err.stack } : {}),
+  });
 });
 
 // ── Server Start ──────────────────────────────────────────────────────────────

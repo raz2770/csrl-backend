@@ -273,20 +273,28 @@ export function computeStudentWeakSubject(studentTestFlat, testColumns) {
     .sort((a, b) => a.avg - b.avg)[0].sub;
 }
 
+/** JEE: 360 total (120 per subject); NEET: 720 total (180+180+360). */
 function streamCaps(stream) {
   const s = stream === 'NEET' ? 'NEET' : 'JEE';
   if (s === 'NEET') {
     return {
-      stream: s,
+      stream: 'NEET',
       maxTotal: 720,
       maxBySubject: { Physics: 180, Chemistry: 180, Biology: 360 },
     };
   }
   return {
-    stream: s,
+    stream: 'JEE',
     maxTotal: 360,
     maxBySubject: { Physics: 120, Chemistry: 120, Math: 120 },
   };
+}
+
+function maxForSubject(stream, subject) {
+  const { maxBySubject } = streamCaps(stream);
+  if (subject && maxBySubject[subject] != null) return maxBySubject[subject];
+  const vals = Object.values(maxBySubject);
+  return vals.length ? Math.max(...vals) : 120;
 }
 
 function round2(n) {
@@ -361,8 +369,8 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
         center: p.centerCode || '—',
         total: t,
         scorePercent: round2(pct),
-        maxTotal,
         stream,
+        maxTotal,
       };
     }
   });
@@ -374,17 +382,19 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     top10CentreCounts[c] = (top10CentreCounts[c] || 0) + 1;
   });
 
-  /** @type {Array<{ roll: string, center: string, appeared: boolean, qualified: boolean, total: number|null, subjectScores: Record<string, number|null> }>} */
+  /** @type {Array<{ roll: string, center: string, stream: string, appeared: boolean, qualified: boolean, total: number|null, subjectScores: Record<string, number|null>, overallMin: number, subjectMins: Record<string, number> }>} */
   const studentStates = [];
 
   profiles.forEach((p) => {
     const doc = tests.find((t) => t.ROLL_KEY === p.ROLL_KEY);
     const stream = p.stream || doc?.stream || 'JEE';
-    const { maxBySubject, maxTotal } = streamCaps(stream);
-    const overallMin = maxTotal * overallQualifyRatio;
-    const subjectMins = Object.fromEntries(
-      subjects.map((subj) => [subj, (maxBySubject[subj] || 120) * subjectQualifyRatio])
-    );
+    const caps = streamCaps(stream);
+    const overallMin = caps.maxTotal * overallQualifyRatio;
+    const subjectMins = {};
+    subjectCols.forEach((col) => {
+      const subj = parseTestColumn(col).subject;
+      subjectMins[subj] = maxForSubject(stream, subj) * subjectQualifyRatio;
+    });
 
     const subjectScores = {};
     subjectCols.forEach((col) => {
@@ -396,6 +406,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       studentStates.push({
         roll: p.ROLL_KEY,
         center: p.centerCode || 'UNKNOWN',
+        stream,
         appeared: false,
         qualified: false,
         total: null,
@@ -415,6 +426,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       studentStates.push({
         roll: p.ROLL_KEY,
         center: p.centerCode || 'UNKNOWN',
+        stream,
         appeared: false,
         qualified: false,
         total,
@@ -430,7 +442,8 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       for (const col of subjectCols) {
         const subj = parseTestColumn(col).subject;
         const m = numericScore(doc[col]);
-        if (m !== null && m < (subjectMins[subj] ?? 0)) qualified = false;
+        const smin = subjectMins[subj];
+        if (m !== null && smin !== undefined && m < smin) qualified = false;
       }
     } else {
       qualified = false;
@@ -439,6 +452,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     studentStates.push({
       roll: p.ROLL_KEY,
       center: p.centerCode || 'UNKNOWN',
+      stream,
       appeared: true,
       qualified,
       total,
@@ -464,8 +478,8 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     if (!st.appeared) return;
     subjects.forEach((subj) => {
       const m = st.subjectScores[subj];
-      const smin = st.subjectMins?.[subj] ?? 0;
-      if (m !== null && m < smin) {
+      const smin = st.subjectMins[subj];
+      if (m !== null && smin !== undefined && m < smin) {
         const c = st.center;
         notQualifiedBySubject[subj][c] = (notQualifiedBySubject[subj][c] || 0) + 1;
       }
@@ -517,32 +531,24 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
   const bottom5Centres =
     centreRows.length <= 5 ? [...centreRows].reverse() : centreRows.slice(-5).reverse();
 
-  const globalMarks = {};
-  const globalCounts = {};
-  subjects.forEach((subj) => {
-    globalMarks[subj] = 0;
-    globalCounts[subj] = 0;
-  });
-
-  studentStates.forEach((st) => {
-    if (!st.appeared) return;
-    subjects.forEach((subj) => {
-      const m = st.subjectScores[subj];
-      if (m !== null) {
-        globalMarks[subj] += m;
-        globalCounts[subj] += 1;
-      }
-    });
-  });
-
   const globalSubjectStats = subjects.map((subj) => {
-    const n = globalCounts[subj];
-    const avgMarks = n ? globalMarks[subj] / n : 0;
-    const subjectCap = subj === 'Biology' ? 360 : 180;
-    const scorePercentOfMax = round2((avgMarks / subjectCap) * 100);
+    let sumPct = 0;
+    let sumMarks = 0;
+    let n = 0;
+    studentStates.forEach((st) => {
+      if (!st.appeared) return;
+      const m = st.subjectScores[subj];
+      if (m === null || m === undefined) return;
+      const cap = maxForSubject(st.stream, subj);
+      sumPct += (m / cap) * 100;
+      sumMarks += m;
+      n += 1;
+    });
+    const scorePercentOfMax = n ? round2(sumPct / n) : 0;
+    const avgMarks = n ? round2(sumMarks / n) : 0;
     return {
       subject: subj,
-      avgMarks: round2(avgMarks),
+      avgMarks,
       scorePercentOfMax,
       studentCount: n,
     };
@@ -555,27 +561,25 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     .sort((a, b) => a.qualRate - b.qualRate)
     .slice(0, 12);
 
-  const jeeCaps = streamCaps('JEE');
-  const neetCaps = streamCaps('NEET');
+  const buildCutoffsForStream = (streamName) => {
+    const caps = streamCaps(streamName);
+    const subjectMinBySubject = {};
+    Object.keys(caps.maxBySubject).forEach((k) => {
+      subjectMinBySubject[k] = round2(caps.maxBySubject[k] * subjectQualifyRatio);
+    });
+    return {
+      maxTotal: caps.maxTotal,
+      maxBySubject: caps.maxBySubject,
+      overallMin: round2(caps.maxTotal * overallQualifyRatio),
+      subjectMinBySubject,
+    };
+  };
+
   const cutoffs = {
-    JEE: {
-      maxTotal: jeeCaps.maxTotal,
-      maxBySubject: jeeCaps.maxBySubject,
-      overallMin: round2(jeeCaps.maxTotal * overallQualifyRatio),
-      subjectMinBySubject: Object.fromEntries(
-        Object.entries(jeeCaps.maxBySubject).map(([sub, max]) => [sub, round2(max * subjectQualifyRatio)])
-      ),
-    },
-    NEET: {
-      maxTotal: neetCaps.maxTotal,
-      maxBySubject: neetCaps.maxBySubject,
-      overallMin: round2(neetCaps.maxTotal * overallQualifyRatio),
-      subjectMinBySubject: Object.fromEntries(
-        Object.entries(neetCaps.maxBySubject).map(([sub, max]) => [sub, round2(max * subjectQualifyRatio)])
-      ),
-    },
     overallQualifyRatio,
     subjectQualifyRatio,
+    JEE: buildCutoffsForStream('JEE'),
+    NEET: buildCutoffsForStream('NEET'),
   };
 
   let studentInsight = null;
@@ -610,6 +614,6 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     qualificationRateByCentre,
     studentInsight,
     note:
-      'Based on stored marks only. “Score %” is marks as a percentage of stream maxima (JEE: 360 total, 120 per subject; NEET: 720 total, Physics/Chemistry 180 and Biology 360). Qualification uses default cutoffs (40% of total, 35% per subject). Attempt accuracy is not stored in this system.',
+      'Based on stored marks only. Score % uses stream maxima (JEE: 360 total, 120 per subject; NEET: 720 total, 180+180+360). Qualification uses default cutoffs (40% of total, 35% per subject). Attempt accuracy is not stored in this system.',
   };
 }

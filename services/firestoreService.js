@@ -122,31 +122,44 @@ export async function loadGlobalDataFromFirestore() {
     return { profiles: [], tests: [], testColumns: [] };
   }
 
-  const db = getFirestore();
-  const [pSnap, tSnap] = await Promise.all([
-    db.collection(COL_PROFILES).get(),
-    db.collection(COL_TESTS).get(),
-  ]);
+  try {
+    const db = getFirestore();
+    const [pSnap, tSnap] = await Promise.all([
+      db.collection(COL_PROFILES).get(),
+      db.collection(COL_TESTS).get(),
+    ]);
 
-  const profiles = pSnap.docs.map((d) => d.data());
+    const profiles = pSnap.docs.map((d) => d.data());
 
-  const testColumnsSet = new Set();
-  const tests = tSnap.docs.map((d) => {
-    const raw    = d.data();
-    const nested = ensureNested(raw);                      // handle legacy flat docs
-    const flat   = nestedToFlat(nested);
+    const testColumnsSet = new Set();
+    const tests = tSnap.docs.map((d) => {
+      const raw = d.data();
+      const nested = ensureNested(raw);
+      const flat = nestedToFlat(nested);
 
-    // Derive test columns directly from the nested structure
-    extractColumnsFromNestedTests(nested.tests).forEach((c) => testColumnsSet.add(c));
+      extractColumnsFromNestedTests(nested.tests).forEach((c) => testColumnsSet.add(c));
 
-    return flat;
-  });
+      return flat;
+    });
 
-  return {
-    profiles,
-    tests,
-    testColumns: Array.from(testColumnsSet),
-  };
+    return {
+      profiles,
+      tests,
+      testColumns: Array.from(testColumnsSet),
+    };
+  } catch (err) {
+    const code = err.code;
+    const msg = err.message || String(err);
+    console.error('[Firestore] loadGlobalDataFromFirestore failed:', code || '', msg);
+    const e = new Error(
+      code === 7 || /PERMISSION_DENIED|permission/i.test(msg)
+        ? 'Firestore permission denied — check rules and that the service account can read collections.'
+        : `Firestore read failed (${code || 'error'}): ${msg}`
+    );
+    e.statusCode = 503;
+    e.cause = err;
+    throw e;
+  }
 }
 
 // ── Individual CRUD operations ─────────────────────────────────────────────────
