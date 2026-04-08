@@ -275,7 +275,18 @@ export function computeStudentWeakSubject(studentTestFlat, testColumns) {
 
 function streamCaps(stream) {
   const s = stream === 'NEET' ? 'NEET' : 'JEE';
-  return { maxPerSubject: 60, maxTotal: 180, stream: s };
+  if (s === 'NEET') {
+    return {
+      stream: s,
+      maxTotal: 720,
+      maxBySubject: { Physics: 180, Chemistry: 180, Biology: 360 },
+    };
+  }
+  return {
+    stream: s,
+    maxTotal: 360,
+    maxBySubject: { Physics: 120, Chemistry: 120, Math: 120 },
+  };
 }
 
 function round2(n) {
@@ -350,6 +361,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
         center: p.centerCode || '—',
         total: t,
         scorePercent: round2(pct),
+        maxTotal,
         stream,
       };
     }
@@ -368,9 +380,11 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
   profiles.forEach((p) => {
     const doc = tests.find((t) => t.ROLL_KEY === p.ROLL_KEY);
     const stream = p.stream || doc?.stream || 'JEE';
-    const { maxPerSubject, maxTotal } = streamCaps(stream);
+    const { maxBySubject, maxTotal } = streamCaps(stream);
     const overallMin = maxTotal * overallQualifyRatio;
-    const subjectMin = maxPerSubject * subjectQualifyRatio;
+    const subjectMins = Object.fromEntries(
+      subjects.map((subj) => [subj, (maxBySubject[subj] || 120) * subjectQualifyRatio])
+    );
 
     const subjectScores = {};
     subjectCols.forEach((col) => {
@@ -387,7 +401,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
         total: null,
         subjectScores,
         overallMin,
-        subjectMin,
+        subjectMins,
       });
       return;
     }
@@ -406,7 +420,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
         total,
         subjectScores,
         overallMin,
-        subjectMin,
+        subjectMins,
       });
       return;
     }
@@ -416,7 +430,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       for (const col of subjectCols) {
         const subj = parseTestColumn(col).subject;
         const m = numericScore(doc[col]);
-        if (m !== null && m < subjectMin) qualified = false;
+        if (m !== null && m < (subjectMins[subj] ?? 0)) qualified = false;
       }
     } else {
       qualified = false;
@@ -430,7 +444,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       total,
       subjectScores,
       overallMin,
-      subjectMin,
+      subjectMins,
     });
   });
 
@@ -450,7 +464,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     if (!st.appeared) return;
     subjects.forEach((subj) => {
       const m = st.subjectScores[subj];
-      const smin = st.subjectMin;
+      const smin = st.subjectMins?.[subj] ?? 0;
       if (m !== null && m < smin) {
         const c = st.center;
         notQualifiedBySubject[subj][c] = (notQualifiedBySubject[subj][c] || 0) + 1;
@@ -524,7 +538,8 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
   const globalSubjectStats = subjects.map((subj) => {
     const n = globalCounts[subj];
     const avgMarks = n ? globalMarks[subj] / n : 0;
-    const scorePercentOfMax = round2((avgMarks / 60) * 100);
+    const subjectCap = subj === 'Biology' ? 360 : 180;
+    const scorePercentOfMax = round2((avgMarks / subjectCap) * 100);
     return {
       subject: subj,
       avgMarks: round2(avgMarks),
@@ -540,14 +555,27 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     .sort((a, b) => a.qualRate - b.qualRate)
     .slice(0, 12);
 
-  const { maxTotal, maxPerSubject } = streamCaps('JEE');
+  const jeeCaps = streamCaps('JEE');
+  const neetCaps = streamCaps('NEET');
   const cutoffs = {
-    overallMin: round2(maxTotal * overallQualifyRatio),
-    subjectMin: round2(maxPerSubject * subjectQualifyRatio),
+    JEE: {
+      maxTotal: jeeCaps.maxTotal,
+      maxBySubject: jeeCaps.maxBySubject,
+      overallMin: round2(jeeCaps.maxTotal * overallQualifyRatio),
+      subjectMinBySubject: Object.fromEntries(
+        Object.entries(jeeCaps.maxBySubject).map(([sub, max]) => [sub, round2(max * subjectQualifyRatio)])
+      ),
+    },
+    NEET: {
+      maxTotal: neetCaps.maxTotal,
+      maxBySubject: neetCaps.maxBySubject,
+      overallMin: round2(neetCaps.maxTotal * overallQualifyRatio),
+      subjectMinBySubject: Object.fromEntries(
+        Object.entries(neetCaps.maxBySubject).map(([sub, max]) => [sub, round2(max * subjectQualifyRatio)])
+      ),
+    },
     overallQualifyRatio,
     subjectQualifyRatio,
-    maxTotal,
-    maxPerSubject,
   };
 
   let studentInsight = null;
@@ -582,6 +610,6 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     qualificationRateByCentre,
     studentInsight,
     note:
-      'Based on stored marks only. “Score %” is marks as a percentage of max (60 per subject, 180 total). Qualification uses default cutoffs (40% of total, 35% per subject). Attempt accuracy is not stored in this system.',
+      'Based on stored marks only. “Score %” is marks as a percentage of stream maxima (JEE: 360 total, 120 per subject; NEET: 720 total, Physics/Chemistry 180 and Biology 360). Qualification uses default cutoffs (40% of total, 35% per subject). Attempt accuracy is not stored in this system.',
   };
 }
