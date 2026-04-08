@@ -2,18 +2,14 @@ import express from 'express';
 import cors from 'cors';
 import jwt from 'jsonwebtoken';
 import 'dotenv/config';
-import {
-  initializeCache,
-  hydrateCache,
-  getGlobalData,
-  getCenterData,
-} from './services/dataCache.js';
 import { isFirebaseReady } from './services/firebaseInit.js';
 import {
   isFirestoreEnabled,
   upsertProfileDoc,
   deleteStudentDocs,
-  upsertTestDoc
+  upsertTestDoc,
+  loadApplicationData,
+  sliceCenterFromGlobal,
 } from './services/firestoreService.js';
 import {
   computeOverview,
@@ -36,8 +32,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'csrl_super_secret_key_2026';
 app.use(cors({ origin: '*' }));
 app.use(express.json());
 
-app.get('/api/health', (_req, res) => {
-  const global = getGlobalData();
+app.get('/api/health', async (_req, res) => {
+  const global = await loadApplicationData();
   res.json({
     ok: true,
     firebaseReady: isFirebaseReady(),
@@ -71,7 +67,7 @@ function findProfile(globalData, rollKey, centerCode) {
 
 // ── Auth ───────────────────────────────────────────────────────────────────────
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { role, id, password } = req.body;
 
   if (role === 'admin') {
@@ -86,7 +82,7 @@ app.post('/api/auth/login', (req, res) => {
       return res.json({ success: true, token, role: 'centre', id, centerCode: id, name: cc.name });
     }
   } else if (role === 'student') {
-    const globalData = getGlobalData();
+    const globalData = await loadApplicationData();
     const student = globalData.profiles.find(
       (p) => p.ROLL_KEY === id || p['ROLL NO.'] === id
     );
@@ -131,19 +127,21 @@ function requireAdmin(req, res, next) {
 
 // ── Data Read Routes ───────────────────────────────────────────────────────────
 
-app.get('/api/data/global', authenticateToken, (req, res) => {
+app.get('/api/data/global', authenticateToken, async (req, res) => {
   if (req.user.role !== 'admin') return res.status(403).json({ message: 'Forbidden' });
-  res.json(getGlobalData());
+  res.json(await loadApplicationData());
 });
 
-app.get('/api/data/center', authenticateToken, (req, res) => {
+app.get('/api/data/center', authenticateToken, async (req, res) => {
   if (req.user.role !== 'centre') return res.status(403).json({ message: 'Forbidden' });
-  res.json(getCenterData(req.user.id));
+  const global = await loadApplicationData();
+  res.json(sliceCenterFromGlobal(global, req.user.id));
 });
 
-app.get('/api/data/student', authenticateToken, (req, res) => {
+app.get('/api/data/student', authenticateToken, async (req, res) => {
   if (req.user.role !== 'student') return res.status(403).json({ message: 'Forbidden' });
-  const centerData = getCenterData(req.user.centerCode);
+  const global = await loadApplicationData();
+  const centerData = sliceCenterFromGlobal(global, req.user.centerCode);
   res.json({
     profiles:    centerData.profiles.filter((p) => p.ROLL_KEY === req.user.id),
     tests:       centerData.tests.filter((t)    => t.ROLL_KEY === req.user.id),
@@ -157,9 +155,10 @@ app.get('/api/data/student', authenticateToken, (req, res) => {
  * GET /api/analytics/overview?centerCode=
  * Returns high-level KPIs. Scoped to a centre if centerCode is provided.
  */
-app.get('/api/analytics/overview', authenticateToken, (req, res) => {
+app.get('/api/analytics/overview', authenticateToken, async (req, res) => {
   const { centerCode } = req.query;
-  const source = centerCode ? getCenterData(centerCode) : getGlobalData();
+  const global = await loadApplicationData();
+  const source = centerCode ? sliceCenterFromGlobal(global, centerCode) : global;
   const result = computeOverview(source.profiles, source.tests, source.testColumns);
   res.json(result);
 });
@@ -169,11 +168,12 @@ app.get('/api/analytics/overview', authenticateToken, (req, res) => {
  * Rank students by a test column.
  * order=asc returns bottom (lowest scores first).
  */
-app.get('/api/analytics/rankings', authenticateToken, (req, res) => {
+app.get('/api/analytics/rankings', authenticateToken, async (req, res) => {
   const { testKey, centerCode, limit = '30', order = 'desc' } = req.query;
   if (!testKey) return res.status(400).json({ message: 'testKey is required' });
 
-  const source  = centerCode ? getCenterData(centerCode) : getGlobalData();
+  const global = await loadApplicationData();
+  const source = centerCode ? sliceCenterFromGlobal(global, centerCode) : global;
   let ranked    = rankStudentsByTest(source.profiles, source.tests, testKey);
   const absent  = absentCount(source.profiles, source.tests, testKey);
 
@@ -192,11 +192,11 @@ app.get('/api/analytics/rankings', authenticateToken, (req, res) => {
  * GET /api/analytics/centre-leaderboard?testKey=
  * Rank all centres by average score for the given test column.
  */
-app.get('/api/analytics/centre-leaderboard', authenticateToken, (req, res) => {
+app.get('/api/analytics/centre-leaderboard', authenticateToken, async (req, res) => {
   const { testKey } = req.query;
   if (!testKey) return res.status(400).json({ message: 'testKey is required' });
 
-  const global = getGlobalData();
+  const global = await loadApplicationData();
   const result = rankCentresByTest(global.profiles, global.tests, testKey, global.testColumns);
   res.json(result);
 });
@@ -206,9 +206,10 @@ app.get('/api/analytics/centre-leaderboard', authenticateToken, (req, res) => {
  * Per-subject averages (weakest first). Scoped to a centre if centerCode provided.
  * If testKey is set, only that test’s subject columns are included (not all tests).
  */
-app.get('/api/analytics/subject-averages', authenticateToken, (req, res) => {
+app.get('/api/analytics/subject-averages', authenticateToken, async (req, res) => {
   const { centerCode, testKey } = req.query;
-  const source = centerCode ? getCenterData(centerCode) : getGlobalData();
+  const global = await loadApplicationData();
+  const source = centerCode ? sliceCenterFromGlobal(global, centerCode) : global;
   const result = testKey
     ? subjectAveragesForTest(source.tests, source.testColumns, testKey)
     : subjectAverages(source.tests, source.testColumns);
@@ -219,11 +220,11 @@ app.get('/api/analytics/subject-averages', authenticateToken, (req, res) => {
  * GET /api/analytics/test-insights?testKey=&rollKey=
  * CAT-style analysis (marks-based). Uses global data. Optional rollKey for student card.
  */
-app.get('/api/analytics/test-insights', authenticateToken, (req, res) => {
+app.get('/api/analytics/test-insights', authenticateToken, async (req, res) => {
   const { testKey, rollKey } = req.query;
   if (!testKey) return res.status(400).json({ message: 'testKey is required' });
 
-  const global = getGlobalData();
+  const global = await loadApplicationData();
   const result = computeTestInsights(global.profiles, global.tests, testKey, global.testColumns, {
     rollKey: rollKey || undefined,
   });
@@ -234,11 +235,12 @@ app.get('/api/analytics/test-insights', authenticateToken, (req, res) => {
  * GET /api/analytics/student-chart?rollKey=&centerCode=
  * Chart-ready performance data for a single student.
  */
-app.get('/api/analytics/student-chart', authenticateToken, (req, res) => {
+app.get('/api/analytics/student-chart', authenticateToken, async (req, res) => {
   const { rollKey, centerCode } = req.query;
   if (!rollKey) return res.status(400).json({ message: 'rollKey is required' });
 
-  const source     = centerCode ? getCenterData(centerCode) : getGlobalData();
+  const global = await loadApplicationData();
+  const source = centerCode ? sliceCenterFromGlobal(global, centerCode) : global;
   const testDoc    = source.tests.find((t) => t.ROLL_KEY === rollKey) || {};
   const chartData  = buildStudentChartData(testDoc, source.testColumns);
   const weakSubj   = computeStudentWeakSubject(testDoc, source.testColumns);
@@ -251,9 +253,10 @@ app.get('/api/analytics/student-chart', authenticateToken, (req, res) => {
  * Return all known test columns and their parsed metadata.
  * Scoped to a centre if centerCode provided.
  */
-app.get('/api/analytics/test-columns', authenticateToken, (req, res) => {
+app.get('/api/analytics/test-columns', authenticateToken, async (req, res) => {
   const { centerCode } = req.query;
-  const source  = centerCode ? getCenterData(centerCode) : getGlobalData();
+  const global = await loadApplicationData();
+  const source = centerCode ? sliceCenterFromGlobal(global, centerCode) : global;
   const columns = source.testColumns;
 
   // Derive unique test names (total columns = no underscore / recognised total)
@@ -276,7 +279,7 @@ app.post('/api/students', authenticateToken, requireAdmin, async (req, res) => {
   // Default stream to JEE
   if (!student.stream) student.stream = 'JEE';
 
-  const globalData = getGlobalData();
+  const globalData = await loadApplicationData();
   const exists = globalData.profiles.find(
     (p) => p.centerCode === student.centerCode && p.ROLL_KEY === student.ROLL_KEY
   );
@@ -287,11 +290,11 @@ app.post('/api/students', authenticateToken, requireAdmin, async (req, res) => {
   try {
     if (isFirestoreEnabled()) {
       await upsertProfileDoc(student);
-      await hydrateCache();
     } else {
       globalData.profiles.push(student);
     }
-    const saved = getGlobalData().profiles.find(
+    const fresh = await loadApplicationData();
+    const saved = fresh.profiles.find(
       (p) => p.centerCode === student.centerCode && p.ROLL_KEY === student.ROLL_KEY
     );
     console.log(`[CRUD] Added student: ${student.ROLL_KEY}`);
@@ -305,8 +308,8 @@ app.post('/api/students', authenticateToken, requireAdmin, async (req, res) => {
 app.put('/api/students/:rollKey', authenticateToken, requireAdmin, async (req, res) => {
   const { rollKey }  = req.params;
   const centerCode   = req.query.centerCode;
-  const globalData   = getGlobalData();
-  const idx          = findProfileIndex(globalData, rollKey, centerCode);
+  const globalData = await loadApplicationData();
+  const idx = findProfileIndex(globalData, rollKey, centerCode);
 
   if (idx === -2) return res.status(400).json({ message: 'Multiple students share this roll; pass centerCode query' });
   if (idx === -1) return res.status(404).json({ message: 'Student not found' });
@@ -316,11 +319,11 @@ app.put('/api/students/:rollKey', authenticateToken, requireAdmin, async (req, r
   try {
     if (isFirestoreEnabled()) {
       await upsertProfileDoc(merged);
-      await hydrateCache();
     } else {
       globalData.profiles[idx] = merged;
     }
-    const updated = getGlobalData().profiles.find(
+    const fresh = await loadApplicationData();
+    const updated = fresh.profiles.find(
       (p) => p.ROLL_KEY === rollKey && p.centerCode === merged.centerCode
     );
     console.log(`[CRUD] Updated student: ${rollKey}`);
@@ -334,8 +337,8 @@ app.put('/api/students/:rollKey', authenticateToken, requireAdmin, async (req, r
 app.delete('/api/students/:rollKey', authenticateToken, requireAdmin, async (req, res) => {
   const { rollKey } = req.params;
   const centerCode  = req.query.centerCode;
-  const globalData  = getGlobalData();
-  const idx         = findProfileIndex(globalData, rollKey, centerCode);
+  const globalData = await loadApplicationData();
+  const idx = findProfileIndex(globalData, rollKey, centerCode);
 
   if (idx === -2) return res.status(400).json({ message: 'Multiple students share this roll; pass centerCode query' });
   if (idx === -1) return res.status(404).json({ message: 'Student not found' });
@@ -345,7 +348,6 @@ app.delete('/api/students/:rollKey', authenticateToken, requireAdmin, async (req
   try {
     if (isFirestoreEnabled()) {
       await deleteStudentDocs(cc, rollKey);
-      await hydrateCache();
     } else {
       globalData.profiles.splice(idx, 1);
       const tIdx = globalData.tests.findIndex(
@@ -374,8 +376,8 @@ app.post('/api/tests/:rollKey', authenticateToken, requireAdmin, async (req, res
   const centerCode   = req.query.centerCode;
   const { scores }   = req.body;
 
-  const globalData = getGlobalData();
-  const profile    = findProfile(globalData, rollKey, centerCode);
+  const globalData = await loadApplicationData();
+  const profile = findProfile(globalData, rollKey, centerCode);
 
   if (!profile) {
     if (!centerCode && globalData.profiles.filter((p) => p.ROLL_KEY === rollKey).length > 1) {
@@ -389,7 +391,6 @@ app.post('/api/tests/:rollKey', authenticateToken, requireAdmin, async (req, res
   try {
     if (isFirestoreEnabled()) {
       const testRecord = await upsertTestDoc(cc, rollKey, scores);
-      await hydrateCache();
       console.log(`[CRUD] Upserted test scores for: ${rollKey}`);
       return res.json({ success: true, testRecord });
     }
@@ -413,7 +414,6 @@ app.post('/api/tests/:rollKey', authenticateToken, requireAdmin, async (req, res
 
 // ── Server Start ──────────────────────────────────────────────────────────────
 
-app.listen(PORT, async () => {
+app.listen(PORT, () => {
   console.log(`[Server] Core API Backend running on port ${PORT}`);
-  await initializeCache();
 });

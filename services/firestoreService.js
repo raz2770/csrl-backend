@@ -75,12 +75,47 @@ function ensureNested(rawDoc) {
   return flatToNested(rawDoc);
 }
 
-// ── Load from Firestore → in-memory cache ─────────────────────────────────────
+// ── Load from Firestore (or local dev store when Firebase is off) ────────────
+
+let memoryDevStore = null;
+
+function getMemoryDevStore() {
+  if (!memoryDevStore) {
+    memoryDevStore = { profiles: [], tests: [], testColumns: [] };
+  }
+  return memoryDevStore;
+}
+
+/**
+ * Full dataset for the API: Firestore when enabled, otherwise a single in-memory
+ * object (local dev without Firebase credentials).
+ */
+export async function loadApplicationData() {
+  if (!isFirestoreEnabled()) {
+    return getMemoryDevStore();
+  }
+  return loadGlobalDataFromFirestore();
+}
+
+/**
+ * Centre-filtered slice of global data (same shape as full global).
+ */
+export function sliceCenterFromGlobal(globalData, centerCode) {
+  const profiles = globalData.profiles.filter((p) => p.centerCode === centerCode);
+  const tests = globalData.tests.filter((t) => t.centerCode === centerCode);
+  const colSet = new Set();
+  tests.forEach((t) => {
+    Object.keys(t).forEach((k) => {
+      if (k !== 'ROLL_KEY' && k !== 'centerCode' && k !== 'stream') colSet.add(k);
+    });
+  });
+  const testColumns = colSet.size > 0 ? Array.from(colSet) : globalData.testColumns;
+  return { profiles, tests, testColumns };
+}
 
 /**
  * Load all profiles + test scores from Firestore.
- * Tests are normalised from nested → flat for the in-memory cache so that
- * all existing analytics code continues to work unchanged.
+ * Tests are normalised from nested → flat so analytics code stays unchanged.
  */
 export async function loadGlobalDataFromFirestore() {
   if (!isFirestoreEnabled()) {
@@ -143,7 +178,7 @@ export async function deleteStudentDocs(centerCode, rollKey) {
  * @param {string} rollKey
  * @param {object} scores  Flat score map:  { "CAT-1(TEST)_Physics": 45, "CAT-1(TEST)": 145, ... }
  *                         OR nested patch:  { tests: { "CAT-1(TEST)": { Physics: 45, total: 145 } } }
- * @returns {object} Flat record as stored (for hydrating the in-memory cache)
+ * @returns {object} Flat record as stored in Firestore
  */
 export async function upsertTestDoc(centerCode, rollKey, scores) {
   if (!isFirestoreEnabled()) return {};
@@ -176,6 +211,5 @@ export async function upsertTestDoc(centerCode, rollKey, scores) {
 
   await ref.set(stripUndefined(base), { merge: false });
 
-  // Return flat format so the caller can update the in-memory cache
   return nestedToFlat(base);
 }
