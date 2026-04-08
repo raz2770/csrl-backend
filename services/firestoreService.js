@@ -7,6 +7,21 @@ const COL_TESTS    = 'testScores'; // renamed from 'tests' for clarity
 
 const BATCH_LIMIT = 450;
 
+/** In-memory read cache: full collection scans are expensive; TTL reduces Firestore read quota usage. */
+let firestoreReadCache = { data: null, expiresAt: 0 };
+
+function readCacheTtlMs() {
+  const raw = process.env.FIRESTORE_READ_CACHE_TTL_MS;
+  if (raw === '0' || raw === '') return 0;
+  const n = parseInt(raw ?? '90000', 10);
+  return Number.isFinite(n) && n >= 0 ? n : 90000;
+}
+
+/** Call after any write so the next load sees fresh data (or bump expiry). */
+export function invalidateFirestoreReadCache() {
+  firestoreReadCache = { data: null, expiresAt: 0 };
+}
+
 export function isFirestoreEnabled() {
   return initFirebaseApp();
 }
@@ -113,8 +128,46 @@ export function sliceCenterFromGlobal(globalData, centerCode) {
   return { profiles, tests, testColumns };
 }
 
+async function fetchGlobalDataFromFirestoreOnce() {
+  const db = getFirestore();
+  const [pSnap, tSnap] = await Promise.all([
+    db.collection(COL_PROFILES).get(),
+    db.collection(COL_TESTS).get(),
+  ]);
+
+  const profiles = pSnap.docs.map((d) => d.data());
+
+  const testColumnsSet = new Set();
+  const tests = tSnap.docs.map((d) => {
+    const raw = d.data();
+    const nested = ensureNested(raw);
+    const flat = nestedToFlat(nested);
+
+    extractColumnsFromNestedTests(nested.tests).forEach((c) => testColumnsSet.add(c));
+
+    return flat;
+  });
+
+  return {
+    profiles,
+    tests,
+    testColumns: Array.from(testColumnsSet),
+  };
+}
+
+function isQuotaError(err) {
+  const code = err.code;
+  const msg = err.message || String(err);
+  return (
+    code === 8 ||
+    code === 'resource-exhausted' ||
+    /RESOURCE_EXHAUSTED|quota exceeded|Quota exceeded/i.test(msg)
+  );
+}
+
 /**
  * Load all profiles + test scores from Firestore.
+ * Uses a short TTL cache to limit reads (see FIRESTORE_READ_CACHE_TTL_MS).
  * Tests are normalised from nested → flat so analytics code stays unchanged.
  */
 export async function loadGlobalDataFromFirestore() {
@@ -122,39 +175,34 @@ export async function loadGlobalDataFromFirestore() {
     return { profiles: [], tests: [], testColumns: [] };
   }
 
+  const ttl = readCacheTtlMs();
+  const now = Date.now();
+  if (ttl > 0 && firestoreReadCache.data && now < firestoreReadCache.expiresAt) {
+    return firestoreReadCache.data;
+  }
+
   try {
-    const db = getFirestore();
-    const [pSnap, tSnap] = await Promise.all([
-      db.collection(COL_PROFILES).get(),
-      db.collection(COL_TESTS).get(),
-    ]);
-
-    const profiles = pSnap.docs.map((d) => d.data());
-
-    const testColumnsSet = new Set();
-    const tests = tSnap.docs.map((d) => {
-      const raw = d.data();
-      const nested = ensureNested(raw);
-      const flat = nestedToFlat(nested);
-
-      extractColumnsFromNestedTests(nested.tests).forEach((c) => testColumnsSet.add(c));
-
-      return flat;
-    });
-
-    return {
-      profiles,
-      tests,
-      testColumns: Array.from(testColumnsSet),
-    };
+    const data = await fetchGlobalDataFromFirestoreOnce();
+    if (ttl > 0) {
+      firestoreReadCache = { data, expiresAt: now + ttl };
+    }
+    return data;
   } catch (err) {
     const code = err.code;
     const msg = err.message || String(err);
     console.error('[Firestore] loadGlobalDataFromFirestore failed:', code || '', msg);
+
+    if (isQuotaError(err) && firestoreReadCache.data) {
+      console.warn('[Firestore] Quota exceeded — serving last successful snapshot (may be stale).');
+      return firestoreReadCache.data;
+    }
+
     const e = new Error(
       code === 7 || /PERMISSION_DENIED|permission/i.test(msg)
         ? 'Firestore permission denied — check rules and that the service account can read collections.'
-        : `Firestore read failed (${code || 'error'}): ${msg}`
+        : isQuotaError(err)
+          ? 'Firestore quota exceeded (too many reads). Wait and retry, raise FIRESTORE_READ_CACHE_TTL_MS (e.g. 120000), or enable billing / upgrade limits in Firebase Console.'
+          : `Firestore read failed (${code || 'error'}): ${msg}`
     );
     e.statusCode = 503;
     e.cause = err;
@@ -172,6 +220,7 @@ export async function upsertProfileDoc(student) {
   const db = getFirestore();
   const id = makeDocId(centerCode, ROLL_KEY);
   await db.collection(COL_PROFILES).doc(id).set(stripUndefined(student), { merge: true });
+  invalidateFirestoreReadCache();
 }
 
 export async function deleteStudentDocs(centerCode, rollKey) {
@@ -182,6 +231,7 @@ export async function deleteStudentDocs(centerCode, rollKey) {
   bat.delete(db.collection(COL_PROFILES).doc(id));
   bat.delete(db.collection(COL_TESTS).doc(id));
   await bat.commit();
+  invalidateFirestoreReadCache();
 }
 
 /**
@@ -224,5 +274,6 @@ export async function upsertTestDoc(centerCode, rollKey, scores) {
 
   await ref.set(stripUndefined(base), { merge: false });
 
+  invalidateFirestoreReadCache();
   return nestedToFlat(base);
 }
