@@ -10,6 +10,7 @@ import {
   upsertTestDoc,
   loadApplicationData,
   sliceCenterFromGlobal,
+  getReadCacheStatus,
 } from './services/firestoreService.js';
 import {
   computeOverview,
@@ -38,6 +39,7 @@ app.get('/api/health', async (_req, res) => {
     ok: true,
     firebaseReady: isFirebaseReady(),
     firestoreEnabled: isFirestoreEnabled(),
+    readCache: getReadCacheStatus(),
     counts: {
       profiles: global.profiles.length,
       tests: global.tests.length,
@@ -93,13 +95,13 @@ app.post('/api/auth/login', async (req, res) => {
         { expiresIn: '12h' }
       );
       return res.json({
-        success:    true,
+        success: true,
         token,
-        role:       'student',
-        id:         student.ROLL_KEY,
-        name:       student["STUDENT'S NAME"],
+        role: 'student',
+        id: student.ROLL_KEY,
+        name: student["STUDENT'S NAME"],
         centerCode: student.centerCode,
-        stream:     student.stream || 'JEE',
+        stream: student.stream || 'JEE',
       });
     }
   }
@@ -115,9 +117,6 @@ function authenticateToken(req, res, next) {
   if (!token) return res.sendStatus(401);
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.sendStatus(403);
-    if (user && typeof user.role === 'string') {
-      user.role = user.role.toLowerCase();
-    }
     req.user = user;
     next();
   });
@@ -146,8 +145,8 @@ app.get('/api/data/student', authenticateToken, async (req, res) => {
   const global = await loadApplicationData();
   const centerData = sliceCenterFromGlobal(global, req.user.centerCode);
   res.json({
-    profiles:    centerData.profiles.filter((p) => p.ROLL_KEY === req.user.id),
-    tests:       centerData.tests.filter((t)    => t.ROLL_KEY === req.user.id),
+    profiles: centerData.profiles.filter((p) => p.ROLL_KEY === req.user.id),
+    tests: centerData.tests.filter((t) => t.ROLL_KEY === req.user.id),
     testColumns: centerData.testColumns,
   });
 });
@@ -184,8 +183,8 @@ app.get('/api/analytics/rankings', authenticateToken, async (req, res) => {
 
   const n = Math.min(parseInt(limit, 10) || 30, ranked.length);
   res.json({
-    ranked:      ranked.slice(0, n),
-    total:       ranked.length,
+    ranked: ranked.slice(0, n),
+    total: ranked.length,
     absentCount: absent,
     testKey,
   });
