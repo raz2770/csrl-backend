@@ -197,7 +197,7 @@ export function rankCentresByTest(profiles, tests, testKey, testColumns) {
         profiles.filter((p) => (p.centerCode || 'UNKNOWN') === code).map((p) => p.ROLL_KEY)
       );
       const centreTests    = tests.filter((t) => rollSet.has(t.ROLL_KEY));
-      const weakAnalysis   = computeWeakSubjectAnalysis(centreTests, testColumns);
+      const weakAnalysis   = computeWeakSubjectAnalysisForTest(centreTests, testColumns, testKey);
       const weakSubject    = weakAnalysis.length ? weakAnalysis[0].subject : 'N/A';
       return { code, avg, top, tested: s.count, studentCount: s.studentCount, weakSubject };
     })
@@ -237,12 +237,13 @@ export function buildStudentChartData(studentTestFlat, testColumns) {
       testsMap[testName][subject] = null;
     }
 
-    // Derive total if no explicit total column
-    if (!isTotal && testsMap[testName].Total === undefined) {
-      const vals = Object.entries(testsMap[testName])
-        .filter(([k, v]) => k !== 'name' && k !== 'Total' && typeof v === 'number');
-      testsMap[testName].Total = vals.length ? vals.reduce((s, [, v]) => s + v, 0) : null;
-    }
+  });
+
+  Object.values(testsMap).forEach((testRow) => {
+    if (testRow.Total !== undefined && testRow.Total !== null) return;
+    const vals = Object.entries(testRow)
+      .filter(([k, v]) => k !== 'name' && k !== 'Total' && typeof v === 'number');
+    testRow.Total = vals.length ? vals.reduce((s, [, v]) => s + v, 0) : null;
   });
 
   return Object.values(testsMap).sort((a, b) =>
@@ -318,6 +319,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
       cutoffs: null,
       overallTopper: null,
       bestScorePercentStudent: null,
+      rankedStudents: [],
       top10: [],
       top10CentreCounts: {},
       globalSubjectStats: [],
@@ -603,6 +605,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     cutoffs,
     overallTopper,
     bestScorePercentStudent,
+    rankedStudents: ranked,
     top10,
     top10CentreCounts,
     globalSubjectStats,
