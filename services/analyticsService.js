@@ -309,6 +309,7 @@ function round2(n) {
 export function computeTestInsights(profiles, tests, testKey, testColumns, options = {}) {
   const overallQualifyRatio = options.overallQualifyRatio ?? 0.4;
   const subjectQualifyRatio = options.subjectQualifyRatio ?? 0.35;
+  const neetOverallMin = options.neetOverallMin ?? 550;
   const rollKeyFilter = options.rollKey || null;
 
   if (!testKey) {
@@ -391,7 +392,7 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     const doc = tests.find((t) => t.ROLL_KEY === p.ROLL_KEY);
     const stream = p.stream || doc?.stream || 'JEE';
     const caps = streamCaps(stream);
-    const overallMin = caps.maxTotal * overallQualifyRatio;
+    const overallMin = stream === 'NEET' ? neetOverallMin : (caps.maxTotal * overallQualifyRatio);
     const subjectMins = {};
     subjectCols.forEach((col) => {
       const subj = parseTestColumn(col).subject;
@@ -569,10 +570,13 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     Object.keys(caps.maxBySubject).forEach((k) => {
       subjectMinBySubject[k] = round2(caps.maxBySubject[k] * subjectQualifyRatio);
     });
+    const overallMin = streamName === 'NEET'
+      ? neetOverallMin
+      : round2(caps.maxTotal * overallQualifyRatio);
     return {
       maxTotal: caps.maxTotal,
       maxBySubject: caps.maxBySubject,
-      overallMin: round2(caps.maxTotal * overallQualifyRatio),
+      overallMin,
       subjectMinBySubject,
     };
   };
@@ -617,6 +621,6 @@ export function computeTestInsights(profiles, tests, testKey, testColumns, optio
     qualificationRateByCentre,
     studentInsight,
     note:
-      'Based on stored marks only. Score % uses stream maxima (JEE: 360 total, 120 per subject; NEET: 720 total, 180+180+360). Qualification uses default cutoffs (40% of total, 35% per subject). Attempt accuracy is not stored in this system.',
+      'Based on stored marks only. Score % uses stream maxima (JEE: 360 total, 120 per subject; NEET: 720 total, 180+180+360). Qualification uses default cutoffs (JEE: 40% of total, NEET: fixed 550 total, and 35% per subject). Attempt accuracy is not stored in this system.',
   };
 }
