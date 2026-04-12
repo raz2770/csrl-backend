@@ -26,13 +26,20 @@
  */
 
 const SUBJECT_ALIASES = {
-  PHY: 'Physics',
-  CHE: 'Chemistry',
-  MAT: 'Math',
-  BIO: 'Biology',
-  BOT: 'Botany',
-  ZOO: 'Zoology',
+  PHY: 'Physics', PHYSICS: 'Physics',
+  CHE: 'Chemistry', CHEM: 'Chemistry', CHEMISTRY: 'Chemistry', CHEMITRY: 'Chemistry',
+  MAT: 'Math', MATH: 'Math', MATHS: 'Math', MATHEMATICS: 'Math',
+  BIO: 'Biology', BIOLOGY: 'Biology',
+  BOT: 'Botany', BOTANY: 'Botany',
+  ZOO: 'Zoology', ZOOLOGY: 'Zoology',
 };
+
+function normalizeSubject(sub) {
+  const token = String(sub || '').trim().toUpperCase();
+  if (SUBJECT_ALIASES[token]) return SUBJECT_ALIASES[token];
+  if (!sub) return 'Total';
+  return sub.charAt(0).toUpperCase() + sub.slice(1).toLowerCase();
+}
 
 const RESERVED_KEYS = new Set(['ROLL_KEY', 'ROLL', 'centerCode', 'stream']);
 
@@ -46,26 +53,18 @@ const RESERVED_KEYS = new Set(['ROLL_KEY', 'ROLL', 'centerCode', 'stream']);
 export function parseTestColumn(col) {
   const raw = String(col || '').trim();
 
-  // New underscore format: CAT-1(TEST)_Physics
+  // New format: CAT-1(TEST)_Physics
   const underscored = raw.match(/^(.+)_([^_]+)$/);
   if (underscored) {
-    return {
-      testName: underscored[1].trim(),
-      subject:  underscored[2].trim(),
-      isTotal:  false,
-    };
+    return { testName: underscored[1].trim(), subject: normalizeSubject(underscored[2]), isTotal: false };
   }
 
-  // Legacy space format: PHY Test 1
+  // Legacy format: PHY Test 1
   const parts = raw.split(/\s+/);
   if (parts.length > 1) {
     const token = (parts[0] || '').toUpperCase();
     if (SUBJECT_ALIASES[token]) {
-      return {
-        testName: parts.slice(1).join(' '),
-        subject:  SUBJECT_ALIASES[token],
-        isTotal:  false,
-      };
+      return { testName: parts.slice(1).join(' '), subject: SUBJECT_ALIASES[token], isTotal: false };
     }
   }
 
