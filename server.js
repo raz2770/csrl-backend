@@ -50,15 +50,28 @@ app.get('/api/health', async (_req, res) => {
 
 // ── Profile helpers ────────────────────────────────────────────────────────────
 
+function normalizeRollKey(v) {
+  return String(v ?? '').trim().replace(/\.0+$/, '').toUpperCase();
+}
+
+function normalizeCenterCode(v) {
+  return String(v ?? '').trim().toUpperCase();
+}
+
 function findProfileIndex(globalData, rollKey, centerCode) {
+  const normalizedRoll = normalizeRollKey(rollKey);
+  const normalizedCenter = normalizeCenterCode(centerCode);
+
   if (centerCode) {
     return globalData.profiles.findIndex(
-      (p) => p.ROLL_KEY === rollKey && p.centerCode === centerCode
+      (p) =>
+        normalizeRollKey(p.ROLL_KEY) === normalizedRoll &&
+        normalizeCenterCode(p.centerCode) === normalizedCenter
     );
   }
-  const matches = globalData.profiles.filter((p) => p.ROLL_KEY === rollKey);
+  const matches = globalData.profiles.filter((p) => normalizeRollKey(p.ROLL_KEY) === normalizedRoll);
   if (matches.length > 1) return -2;
-  return globalData.profiles.findIndex((p) => p.ROLL_KEY === rollKey);
+  return globalData.profiles.findIndex((p) => normalizeRollKey(p.ROLL_KEY) === normalizedRoll);
 }
 
 function findProfile(globalData, rollKey, centerCode) {
@@ -85,8 +98,9 @@ app.post('/api/auth/login', async (req, res) => {
     }
   } else if (role === 'student') {
     const globalData = await loadApplicationData();
+    const normalizedId = normalizeRollKey(id);
     const student = globalData.profiles.find(
-      (p) => p.ROLL_KEY === id || p['ROLL NO.'] === id
+      (p) => normalizeRollKey(p.ROLL_KEY) === normalizedId || normalizeRollKey(p['ROLL NO.']) === normalizedId
     );
     if (student) {
       const token = jwt.sign(
@@ -382,7 +396,7 @@ app.post('/api/tests/:rollKey', authenticateToken, requireAdmin, async (req, res
   const profile = findProfile(globalData, rollKey, centerCode);
 
   if (!profile) {
-    if (!centerCode && globalData.profiles.filter((p) => p.ROLL_KEY === rollKey).length > 1) {
+    if (!centerCode && globalData.profiles.filter((p) => normalizeRollKey(p.ROLL_KEY) === normalizeRollKey(rollKey)).length > 1) {
       return res.status(400).json({ message: 'Multiple students share this roll; pass centerCode query' });
     }
     return res.status(404).json({ message: 'Student not found' });
